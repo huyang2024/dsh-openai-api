@@ -1,4 +1,4 @@
-# @huyang2024/dsh-openai-api
+# dsh-openai-api
 
 OpenAI-compatible HTTP surface for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness), backed by **real DSH agent sessions**.
 
@@ -35,22 +35,33 @@ dsh plugin --profile web add github:huyang2024/dsh-openai-api
 dsh plugin --profile web add file:/absolute/path/to/dsh-openai-api
 ```
 
-Then compose an insert in the profile's user patch layer — `$DSH_HOME/profiles/web/cordis.patch.yml`. New rows reach the tree only through `insert:`:
+The package declares a DSH bundle and automatically contributes the `openai-api` component when newly installed into a profile. Restart the profile to activate it. No manual `insert:` is needed.
+
+For DSH Desktop, initialize the app once, fully quit it, and use the desktop app's bundled `dsh` command with `--profile desktop` instead of `--profile web` (register it from the app's **Manage dsh Command…** menu). The npm-installed CLI cannot manage the desktop profile. You can also install this package from the desktop Plugins page using the GitHub spec or an absolute local checkout path, then choose **Enable now**.
+
+Desktop uses a dynamically assigned HTTP port by default, rather than `3080`. Use its actual listening address as the API base URL; `GET /v1/models` checks that the plugin is running without calling a model.
+
+To customize the component, update the existing row in the profile's user patch layer — `$DSH_HOME/profiles/web/cordis.patch.yml` (or `profiles/desktop/cordis.patch.yml` for Desktop):
 
 ```yaml
-- insert:
-    - id: openai-api
-      name: '@huyang2024/dsh-openai-api'
-      inject: [webServer]
-      config:
-        pathPrefix: '/v1'     # optional, default shown
-        apiKeys: []           # optional; see below
-        model: default        # optional; model id advertised at /v1/models
-        provider: ''          # optional; provider route for created sessions
-        cwd: ''               # optional; absolute working directory for sessions
+- id: openai-api
+  config:
+    pathPrefix: '/v1'     # optional, default shown
+    apiKeys: []           # optional; see below
+    model: default        # optional; model id advertised at /v1/models
+    provider: ''          # optional; provider route for created sessions
+    cwd: ''               # optional; absolute working directory for sessions
 ```
 
-Restart the profile so the new row activates.
+Restart the profile after editing its configuration.
+
+### Upgrading an existing installation
+
+The package is now named `dsh-openai-api`. If you installed the old scoped package, uninstall it before installing this version.
+
+Earlier versions installed as plain dependencies without a bundle declaration. After updating the package, enable it on the Plugins page; the CLI does not automatically enable a dependency that was already installed. Alternatively, add `dsh-openai-api` to the existing `dsh.profile.bundles` array in the profile's `package.json`, preserving the other entries.
+
+If you previously added an `insert:` block for `openai-api`, replace just that entry with the `id`/`config` override above, keeping your configuration values and any unrelated entries. The bundle now owns the component insertion.
 
 ## Configuration
 

@@ -1,4 +1,4 @@
-# @huyang2024/dsh-openai-api
+# dsh-openai-api
 
 为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 提供标准 OpenAI 兼容 HTTP 接口的插件，由 **真实 DSH Agent 会话** 提供服务。
 
@@ -35,22 +35,33 @@ dsh plugin --profile web add github:huyang2024/dsh-openai-api
 dsh plugin --profile web add file:/absolute/path/to/dsh-openai-api
 ```
 
-再在 profile 用户补丁层 `$DSH_HOME/profiles/web/cordis.patch.yml` 中以 `insert:` 方式加入新行（补丁层的裸 `{id, name}` 条目只用于改写下层已有行，不会生效）：
+包已声明 DSH 组合包，首次安装到 profile 时会自动加入 `openai-api` 组件。重启 profile 后生效，无需手动添加 `insert:`。
+
+使用 DSH 桌面端时，先启动一次应用完成初始化，再完全退出，使用桌面端内置的 `dsh` 命令（通过应用菜单的“管理 dsh 命令…”注册），将上述命令的 `--profile web` 改为 `--profile desktop`。npm 安装的 CLI 不能管理桌面端 profile。也可以在桌面端的插件页面使用 GitHub 安装地址或本地仓库的绝对路径安装，然后点击“立即启用”。
+
+桌面端默认使用动态分配的 HTTP 端口，而非 `3080`。调用 API 时请使用实际监听地址；`GET /v1/models` 可检查插件是否运行，不会调用模型。
+
+如需自定义配置，在 profile 用户补丁层 `$DSH_HOME/profiles/web/cordis.patch.yml` 中修改已有组件（桌面端对应 `profiles/desktop/cordis.patch.yml`）：
 
 ```yaml
-- insert:
-    - id: openai-api
-      name: '@huyang2024/dsh-openai-api'
-      inject: [webServer]
-      config:
-        pathPrefix: '/v1'     # 可选，默认值如此
-        apiKeys: []           # 可选，见下表
-        model: default        # 可选；/v1/models 广告的模型 id
-        provider: ''          # 可选；创建会话使用的 provider 路由
-        cwd: ''               # 可选；会话绝对工作目录
+- id: openai-api
+  config:
+    pathPrefix: '/v1'     # 可选，默认值如此
+    apiKeys: []           # 可选，见下表
+    model: default        # 可选；/v1/models 广告的模型 id
+    provider: ''          # 可选；创建会话使用的 provider 路由
+    cwd: ''               # 可选；会话绝对工作目录
 ```
 
-重启 profile 使新行生效。
+修改配置后重启 profile。
+
+### 升级已有安装
+
+包名现已改为 `dsh-openai-api`。如果安装过带作用域前缀的旧包，请先卸载旧包，再安装此版本。
+
+旧版未声明组合包，只会作为普通依赖安装。更新包后，请在插件页面启用它；CLI 不会自动启用已经安装过的依赖。也可以在 profile 的 `package.json` 中，将 `dsh-openai-api` 加入已有的 `dsh.profile.bundles` 数组，并保留其它条目。
+
+如果之前手动为 `openai-api` 添加了 `insert:` 条目，请只将该条目改为上面的 `id`/`config` 覆盖形式，保留原配置值和无关条目。组件的插入现在由组合包负责。
 
 ## 配置
 

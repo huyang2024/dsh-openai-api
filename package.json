@@ -1,5 +1,5 @@
 {
-  "name": "@huyang2024/dsh-openai-api",
+  "name": "dsh-openai-api",
   "description": "OpenAI-compatible HTTP surface backed by DSH agent sessions: POST /v1/chat/completions, POST /v1/responses, GET /v1/models over the harness webServer + agents services",
   "version": "0.2.0",
   "type": "module",
@@ -8,8 +8,15 @@
     ".": "./lib/index.js"
   },
   "files": [
-    "lib/index.js"
+    "lib/index.js",
+    "cordis.patch.yml"
   ],
+  "dsh": {
+    "manifestVersion": 1,
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
   "engines": {
     "node": ">=20"
   },

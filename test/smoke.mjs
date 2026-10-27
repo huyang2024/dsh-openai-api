@@ -1,5 +1,5 @@
 /**
- * Standalone smoke test for the agent-backed @huyang2024/dsh-openai-api.
+ * Standalone smoke test for the agent-backed dsh-openai-api.
  *
  * Drives the real plugin against a faked `agents` service plus faked
  * `session/event` / `agent/inbox/claimed` dispatch. The fake agent emits its
@@ -338,6 +338,25 @@ async function main() {
 			const completed = blocks.find((b) => b.event === "response.completed");
 			assert.strictEqual(completed.data.response.output[0].content[0].text, "streamed response");
 			console.log("responses non-stream + stream OK");
+		}
+		//#endregion
+
+		//#region failed Responses stream stays SSE and leaves the server usable
+		{
+			env.setTurn({ text: "", reason: { kind: "error", error: { message: "provider unavailable" } }, turn: 2 });
+			const res = await request(url, "/v1/responses", { method: "POST", body: { input: "go", stream: true } });
+			assert.strictEqual(res.status, 200); // SSE headers were already sent.
+			assert.match(res.headers.get("content-type"), /text\/event-stream/);
+			const events = parseChunkEvents(res.text);
+			assert.strictEqual(events.length, 1);
+			assert.strictEqual(events[0].event, "error");
+			assert.strictEqual(events[0].data.code, "server_error");
+			assert.match(events[0].data.message, /provider unavailable/);
+			assert.strictEqual((await request(url, "/v1/models")).status, 200);
+			env.setTurn({ text: "recovered", reason: { kind: "stop" }, turn: 3 });
+			const recovered = await request(url, "/v1/responses", { method: "POST", body: { input: "retry" } });
+			assert.strictEqual(JSON.parse(recovered.text).output[0].content[0].text, "recovered");
+			console.log("responses stream failure and recovery OK");
 		}
 		//#endregion
 
