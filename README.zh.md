@@ -16,8 +16,9 @@
 
 每个请求由 **一个存活的 DSH Agent 会话** 服务（harness 的 `agents` 注册表 + agent 循环），因此每次调用都获得 agent 的完整世界：其配置的工具、bash/文件访问、技能、提示词分段和预设人格。这是 **agent 网关**，不是轻量 LLM 代理：
 
-- **工具调用由 agent 自主决定**。客户端的 `tools` / `tool_choice` / function-call 消息会被拒绝——由 agent 决定调用哪些工具以及为什么。
+- **工具调用由 agent 自主决定**。客户端的 `tools` / `tool_choice` / function-call 消息会被拒绝（两个端点一致，`/v1/responses` 不再静默忽略）——由 agent 决定调用哪些工具以及为什么。
 - 流式 delta **按每一条已提交的 assistant 消息** 到达，而非按 token。思考、工具调用和 token 级块流都不上线路；只有已提交的 assistant 文本到达客户端。
+- `/v1/responses` 在轮次开始时就发出 `response.created` / `in_progress` 等生命周期事件，因此长回答不会看起来卡住；中途失败会以 `event: error` 显式收尾。Chat 流中途失败也会发出错误帧后再 `[DONE]`。
 - 每个 `(key, preset, session)` 组合的**首个请求**会通过把客户端完整消息数组渲染成带标签的转写提示来**播种**会话；后续请求只接收最新用户轮次（会话已持有历史）。
 
 ## 会话身份
@@ -57,7 +58,7 @@ dsh plugin --profile web add file:/absolute/path/to/dsh-openai-api
     #   - local-key
 ```
 
-可选键请把整行省略。写成 `apiKeys: []`、`provider: ''`、`cwd: ''` 会被配置校验拒绝：`apiKeys` 必须是非空数组，`provider` 必须是非空字符串，`cwd` 必须是绝对路径。
+可选键请把整行省略。`apiKeys: []` 与省略等价（都是无密钥回环租户）；`provider: ''`、`cwd: ''` 仍会被拒绝：`provider` 必须是非空字符串，`cwd` 必须是绝对路径。
 
 修改配置后重启 profile。
 
@@ -101,9 +102,10 @@ dsh plugin --profile web add file:/absolute/path/to/dsh-openai-api
 | --- | --- | --- |
 | `model` | `default` | `/v1/models` 广告的模型 id。请求 `model`（缺省或等于此值）时使用宿主默认选择；其它 id 作为模型传入会话。 |
 | `provider` | 宿主默认 | 创建会话使用的 provider 路由。 |
-| `apiKeys` | 未设 | 每客户端密钥。每个不同 key 是一个独立租户——每个 `(key, preset, session)` 一个会话。设置后，请求必须携带一个（`Authorization: Bearer <key>`），否则 401。未设置时，表面是单个无密钥租户，**仅限本机回环** 调用。 |
+| `apiKeys` | 未设（等同 `[]`） | 每客户端密钥。每个不同 key 是一个独立租户——每个 `(key, preset, session)` 一个会话。设置后，请求必须携带一个（`Authorization: Bearer <key>`），否则 401。未设置（或显式空数组）时，表面是单个无密钥租户，**仅限本机回环** 调用。 |
 | `cwd` | `dsh web` 进程 cwd | 创建会话的绝对工作目录。POSIX 以 `/` 开头；Windows 可用 `D:/dir` 或 `D:\dir`。 |
 | `pathPrefix` | `/v1` | 三个接口的路由前缀。 |
+| `sessionMapPath` | `$DSH_HOME/openai-api/session-map.json` | 角色会话映射的落盘位置（绝对路径）。用 `(tenant, preset, session)` 的 SHA-256 作键，不含密钥原文，文件权限 0600、原子写入、最多保留 200 条。 |
 | `maxBodyBytes` | `33554432` | 接受的最大 JSON 请求体字节数。 |
 | `allowedOrigins` | 未设 | 允许跨域调用的额外浏览器来源（精确 origin 字符串）。 |
 
@@ -124,7 +126,7 @@ const reply = await client.chat.completions.create(
 )
 ```
 
-`/v1/responses` 遵循同一会话模型；`previous_response_id` 被接受但忽略（粘性会话本身就是存储）。
+`/v1/responses` 遵循同一会话模型：它的 `instructions` 等同首轮的系统消息，`previous_response_id` 会被原样回显但不参与检索（粘性会话本身就是存储）。达到 max tokens 时返回 `status: "incomplete"` 与 `incomplete_details`。
 
 ## 鉴权与信任
 

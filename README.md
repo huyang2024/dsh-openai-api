@@ -16,8 +16,9 @@ It also adds an **API** row at the sidebar foot (above Settings) showing the liv
 
 Each request is served by a **live DSH agent session** (the harness `agents` registry + the agent loop), so every call gets the agent's full world: its configured tools, bash/files access, skills, prompt sections, and preset persona. This is an **agent gateway**, not a thin LLM proxy:
 
-- The **agent owns tool use**. Client-side `tools` / `tool_choice` / function-call messages are rejected — the agent decides what tools to call and why.
+- The **agent owns tool use**. Client-side `tools` / `tool_choice` / function-call messages are rejected on both endpoints (`/v1/responses` no longer ignores them silently) — the agent decides what tools to call and why.
 - Streaming deltas arrive **once per committed assistant message**, not per token. Reasoning, tool calls, and token-level chunk streams stay off the wire; only committed assistant text reaches the client.
+- `/v1/responses` sends its `response.created` / `in_progress` lifecycle events as soon as the turn starts, so a long answer never looks hung, and a mid-turn failure closes the stream with an explicit `event: error`. A chat stream that dies mid-turn now emits an error frame before `[DONE]`.
 - The first request for a `(key, preset, session)` triple **seeds** a session by rendering the client's full message array into a labeled transcript prompt; later requests admit only the latest user turn (the session already holds the history).
 
 ## Session identity
@@ -57,7 +58,7 @@ To customize the component, update the existing row in the profile's user patch 
     #   - local-key
 ```
 
-Omit an optional key entirely rather than writing an empty value: `apiKeys: []`, `provider: ''`, and `cwd: ''` are rejected by configuration validation (`apiKeys` must be a non-empty array, `provider` a non-empty string, and `cwd` an absolute path).
+Omit an optional key entirely rather than writing an empty value. `apiKeys: []` now means the same as omitting it (the keyless loopback tenant), but `provider: ''` and `cwd: ''` are still rejected: `provider` must be a non-empty string and `cwd` an absolute path.
 
 Restart the profile after editing its configuration.
 
@@ -101,9 +102,10 @@ All keys optional; created sessions fall back to the host defaults.
 | --- | --- | --- |
 | `model` | `default` | Model id advertised at `/v1/models`. A request's `model` (absent, or this id) uses the host default selection; any other id is passed to the session as the model. |
 | `provider` | host default | Provider route for created sessions. |
-| `apiKeys` | unset | Per-client keys. Each distinct key is a separate tenant — one session per `(key, preset, session)`. When set, a request must present one (`Authorization: Bearer <key>`); otherwise it is a 401. Unset, the surface is a single keyless tenant restricted to **loopback** callers. |
+| `apiKeys` | unset (= `[]`) | Per-client keys. Each distinct key is a separate tenant — one session per `(key, preset, session)`. When set, a request must present one (`Authorization: Bearer <key>`); otherwise it is a 401. Unset, the surface is a single keyless tenant restricted to **loopback** callers. |
 | `cwd` | the `dsh web` process's cwd | Absolute working directory for created sessions. POSIX starts with `/`; Windows accepts `D:/dir` or `D:\dir`. |
 | `pathPrefix` | `/v1` | Route prefix for all three endpoints. |
+| `sessionMapPath` | `$DSH_HOME/openai-api/session-map.json` | Where the role-session map is written (absolute). Keyed by the SHA-256 of `(tenant, preset, session)` — never the key itself — written 0600, atomically, capped at 200 entries. |
 | `maxBodyBytes` | `33554432` | Maximum accepted JSON request body in bytes. |
 | `allowedOrigins` | unset | Extra browser origins allowed to call cross-origin (exact origin strings). |
 
@@ -124,7 +126,7 @@ const reply = await client.chat.completions.create(
 )
 ```
 
-`/v1/responses` follows the same session model; `previous_response_id` is accepted and ignored (the sticky session is the store).
+`/v1/responses` follows the same session model: its `instructions` act as a first-turn system message, and `previous_response_id` is echoed back without being used for lookup (the sticky session is the store). Hitting the token limit reports `status: "incomplete"` with `incomplete_details`.
 
 ## Auth and trust
 
