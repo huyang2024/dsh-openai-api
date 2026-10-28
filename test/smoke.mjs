@@ -10,6 +10,9 @@
  */
 import { createServer } from "node:http";
 import assert from "node:assert";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const mod = await import("../lib/index.js");
 
@@ -107,7 +110,8 @@ function makeCtx(config) {
 		lastAgent: () => lastHandle?.agent ?? null,
 		setTurn(script) { env.turnScript = script; },
 	};
-	mod.apply(env.ctx, config);
+	// The session map is real file I/O; keep every case inside a throwaway dir.
+	mod.apply(env.ctx, { sessionMapPath: join(mkdtempSync(join(tmpdir(), "openai-api-smoke-")), "session-map.json"), ...config });
 	return env;
 }
 
@@ -337,6 +341,11 @@ async function main() {
 			assert.ok(names.includes("response.output_text.delta"));
 			const completed = blocks.find((b) => b.event === "response.completed");
 			assert.strictEqual(completed.data.response.output[0].content[0].text, "streamed response");
+			// Every event and the final body must name the same output item.
+			const announced = blocks.find((b) => b.event === "response.output_item.added").data.item.id;
+			const closed = blocks.find((b) => b.event === "response.output_item.done").data.item.id;
+			assert.strictEqual(announced, closed);
+			assert.strictEqual(announced, completed.data.response.output[0].id);
 			console.log("responses non-stream + stream OK");
 		}
 		//#endregion
@@ -348,15 +357,111 @@ async function main() {
 			assert.strictEqual(res.status, 200); // SSE headers were already sent.
 			assert.match(res.headers.get("content-type"), /text\/event-stream/);
 			const events = parseChunkEvents(res.text);
-			assert.strictEqual(events.length, 1);
-			assert.strictEqual(events[0].event, "error");
-			assert.strictEqual(events[0].data.code, "server_error");
-			assert.match(events[0].data.message, /provider unavailable/);
+			// The stream opens before the turn runs, so a client is never left
+			// waiting on a long answer; the failure then closes it explicitly.
+			assert.deepStrictEqual(events.slice(0, 2).map((event) => event.event), ["response.created", "response.in_progress"]);
+			const failure = events.at(-1);
+			assert.strictEqual(failure.event, "error");
+			assert.strictEqual(failure.data.code, "server_error");
+			assert.match(failure.data.message, /provider unavailable/);
+			var sequence = events.map((event) => event.data.sequence_number);
+			assert.deepStrictEqual(sequence, [...sequence].sort((left, right) => left - right), "sequence numbers keep increasing");
 			assert.strictEqual((await request(url, "/v1/models")).status, 200);
 			env.setTurn({ text: "recovered", reason: { kind: "stop" }, turn: 3 });
 			const recovered = await request(url, "/v1/responses", { method: "POST", body: { input: "retry" } });
 			assert.strictEqual(JSON.parse(recovered.text).output[0].content[0].text, "recovered");
 			console.log("responses stream failure and recovery OK");
+		}
+		//#endregion
+
+		//#region a null end reason and a partial usage report are survived
+		{
+			// `reason: null` used to raise a TypeError, turning a finished turn into
+			// a 500; a usage report missing counters used to serialize as null.
+			env.setTurn({ text: "still fine", usage: { outputTokens: 3 }, reason: null, turn: 1 });
+			const res = await request(url, "/v1/chat/completions", { method: "POST", body: { messages: [{ role: "user", content: "hi" }] } });
+			assert.strictEqual(res.status, 200);
+			const body = JSON.parse(res.text);
+			assert.strictEqual(body.choices[0].message.content, "still fine");
+			assert.strictEqual(body.choices[0].finish_reason, "stop");
+			assert.deepStrictEqual(body.usage, { prompt_tokens: 0, completion_tokens: 3, total_tokens: 3 });
+			console.log("null end reason and partial usage OK");
+		}
+		//#endregion
+
+		//#region a chat stream that dies mid-turn ends explicitly
+		{
+			env.setTurn({ text: "", reason: { kind: "error", error: { message: "provider unavailable" } }, turn: 4 });
+			const res = await request(url, "/v1/chat/completions", { method: "POST", body: { messages: [{ role: "user", content: "go" }], stream: true } });
+			assert.strictEqual(res.status, 200);
+			// A bare end() would look like a complete answer to the client.
+			assert.match(res.text, /"error":\{"message":"turn failed: provider unavailable"/);
+			assert.ok(res.text.endsWith("data: [DONE]\n\n"), "the stream still terminates explicitly");
+			console.log("chat stream failure frame OK");
+		}
+		//#endregion
+
+		//#region responses reports truncation and echoes the previous response id
+		{
+			env.setTurn({ text: "cut off", reason: { kind: "max-tokens" }, turn: 5 });
+			const res = await request(url, "/v1/responses", { method: "POST", body: { input: "go", previous_response_id: "resp_prev" } });
+			const body = JSON.parse(res.text);
+			assert.strictEqual(body.status, "incomplete");
+			assert.deepStrictEqual(body.incomplete_details, { reason: "max_output_tokens" });
+			assert.strictEqual(body.previous_response_id, "resp_prev");
+			console.log("responses truncation and previous_response_id OK");
+		}
+		//#endregion
+
+		//#region a Responses request cannot smuggle tools past the agent
+		{
+			const res = await request(url, "/v1/responses", { method: "POST", body: { input: "hi", tools: [{ type: "function", name: "f" }] } });
+			assert.strictEqual(res.status, 400);
+			assert.match(JSON.parse(res.text).error.message, /function calling/);
+			console.log("responses tools rejected OK");
+		}
+		//#endregion
+
+		//#region an explicit empty apiKeys list behaves like omitting it
+		{
+			const keyless = makeCtx({ apiKeys: [] });
+			const keylessServer = await listen((req, res) => keyless.routes.get(new URL(req.url, "http://x").pathname)(req, res));
+			try {
+				assert.strictEqual((await request(keylessServer.url, "/v1/models")).status, 200);
+				console.log("explicit empty apiKeys OK");
+			} finally {
+				keylessServer.server.close();
+			}
+		}
+		//#endregion
+
+		//#region admission failure answers 500 and leaves no unhandled rejection
+		{
+			const boomEnv = makeCtx({});
+			const create = boomEnv.ctx.agents.create;
+			boomEnv.ctx.agents.create = async (...args) => {
+				const handle = await create(...args);
+				handle.agent.followup = () => {
+					throw new Error("admission boom");
+				};
+				return handle;
+			};
+			const boomServer = await listen((req, res) => boomEnv.routes.get(new URL(req.url, "http://x").pathname)(req, res));
+			const rejections = [];
+			const onRejection = (reason) => rejections.push(reason);
+			process.on("unhandledRejection", onRejection);
+			try {
+				const res = await request(boomServer.url, "/v1/chat/completions", { method: "POST", body: { messages: [{ role: "user", content: "hi" }] } });
+				assert.strictEqual(res.status, 500);
+				// An unhandled rejection surfaces on a later tick, and terminates a
+				// Node host by default.
+				await new Promise((resolve) => setTimeout(resolve, 30));
+				assert.deepStrictEqual(rejections.map(String), [], "a refused admission must not leave a rejected promise unconsumed");
+				console.log("admission failure without unhandled rejection OK");
+			} finally {
+				process.off("unhandledRejection", onRejection);
+				boomServer.server.close();
+			}
 		}
 		//#endregion
 
@@ -386,13 +491,15 @@ async function main() {
 		}
 		//#endregion
 
-		//#region teardown disposes held sessions and routes
+		//#region teardown disposes held sessions and unmounts routes
 		{
-			const before = env.teardownEffects?.length ?? 0;
-			assert.ok(before >= 1);
-			await env.teardownEffects[0]();
-			// After teardown the previously created agents should be disposed.
-			console.log("teardown effects present and runnable OK");
+			assert.ok((env.teardownEffects?.length ?? 0) >= 1);
+			// The plugin's own teardown is registered last; an earlier slot belongs
+			// to the status snapshot, so indexing 0 would assert nothing.
+			await env.teardownEffects.at(-1)();
+			assert.strictEqual(env.lastAgent().disposed, true, "the held agent is disposed");
+			assert.strictEqual(env.routes.has("/v1/models"), false, "routes are unmounted");
+			console.log("teardown disposes sessions and routes OK");
 		}
 		//#endregion
 

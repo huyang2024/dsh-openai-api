@@ -103,41 +103,38 @@ export function createUi(React, model) {
 		const [probe, setProbe] = useState("idle");
 		const [copied, setCopied] = useState("");
 		const [attempt, setAttempt] = useState(0);
-		const descriptor = useRef(undefined);
 		const rootRef = useRef(null);
 		const inputRef = useRef(null);
 		const copyTimer = useRef(0);
 
-		// The descriptor is a runtime fact, so it is read once per session and
-		// then reused: reopening paints instantly instead of flashing a loading
-		// state, and only the probe re-runs.
+		// Read the descriptor on every open, but keep what the row already shows:
+		// the refresh replaces values once the answer lands, so reopening never
+		// flashes an empty state and a host that moved to another port is picked
+		// up without a page reload. A failed refresh leaves the old values alone.
 		useEffect(() => {
 			if (!open) return undefined;
 			const controller = new AbortController();
+			const hasValues = load.phase === "ready";
+			if (!hasValues) setLoad({ phase: "loading" });
 			setProbe("checking");
 			const statusUrl = model.statusUrlFor(window.location.href);
 			void (async () => {
 				try {
-					let addresses = descriptor.current;
-					if (addresses === undefined) {
-						const embedded = model.snapshotFrom(window);
-						if (embedded !== null) {
-							addresses = model.resolveAddresses(embedded, window.location.href);
-						} else {
-							// requestJson resolves to `{status, body}` — not a Response.
-							const response = await model.requestJson(window.fetch.bind(window), statusUrl, controller.signal);
-							if (controller.signal.aborted) return;
-							if (response.status !== 200) throw new Error(`status ${response.status}`);
-							addresses = model.resolveAddresses(model.parseStatus(response.body), window.location.href);
-						}
-						descriptor.current = addresses;
+					const embedded = model.snapshotFrom(window);
+					let descriptor = embedded;
+					if (descriptor === null) {
+						// requestJson resolves to `{status, body}` — not a Response.
+						const response = await model.requestJson(window.fetch.bind(window), statusUrl, controller.signal);
+						if (response.status !== 200) throw new Error(`status ${response.status}`);
+						descriptor = model.parseStatus(response.body);
 					}
 					if (controller.signal.aborted) return;
+					const addresses = model.resolveAddresses(descriptor, window.location.href);
 					setLoad({ phase: "ready", ...addresses });
 					// Expanding is the request to know whether the surface answers.
 					await runProbe(addresses.probeUrl, controller.signal);
 				} catch (error) {
-					if (controller.signal.aborted) return;
+					if (controller.signal.aborted || hasValues) return;
 					setLoad({ phase: "error", message: error instanceof Error ? error.message : String(error), statusUrl });
 				}
 			})();
@@ -149,7 +146,8 @@ export function createUi(React, model) {
 		useEffect(() => {
 			if (!open) return undefined;
 			const onKeyDown = (event) => {
-				if (event.key === "Escape") close();
+				// Another surface may own this Escape (a dialog above us).
+				if (event.key === "Escape" && !event.defaultPrevented) close();
 			};
 			const onPointerDown = (event) => {
 				if (rootRef.current?.contains(event.target) === true) return;
@@ -221,6 +219,7 @@ export function createUi(React, model) {
 					type: "button",
 					className: "dsh-openai-header",
 					"aria-expanded": open,
+					"aria-controls": open ? "dsh-openai-detail" : undefined,
 					"aria-label": expanded ? undefined : `API 接入信息${ready ? ` · ${load.baseUrl}` : ""}`,
 					onClick: () => setOpen((value) => !value),
 				},
@@ -230,14 +229,14 @@ export function createUi(React, model) {
 					h("span", { className: "dsh-openai-chevron", "aria-hidden": true }, h(Chevron, { expanded: open })),
 				),
 
-				open && h("div", { className: "dsh-openai-detail" },
+				open && h("div", { id: "dsh-openai-detail", className: "dsh-openai-detail" },
 					// One stable skeleton from the first frame: the values fill in
 					// place, so expanding never reflows or flashes.
 					load.phase === "error"
 						? h("div", { className: "dsh-openai-detail" },
 							h("p", { className: "dsh-openai-note" }, `无法读取接入信息：${reasonText(load.message)}`),
 							h("p", { className: "dsh-openai-note" }, load.statusUrl ?? ""),
-							h("button", { type: "button", className: "dsh-openai-button", onClick: () => { descriptor.current = undefined; setAttempt((value) => value + 1); } }, "重试"),
+							h("button", { type: "button", className: "dsh-openai-button", onClick: () => setAttempt((value) => value + 1) }, "重试"),
 						)
 						: h("div", { className: "dsh-openai-detail" },
 							h("label", { className: "dsh-openai-label", htmlFor: "dsh-openai-base" }, "接入地址 · Base URL"),

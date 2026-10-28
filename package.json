@@ -22,7 +22,7 @@
   ],
   "scripts": {
     "build:client": "node client/build.mjs",
-    "test": "node --test test/ui-status.mjs test/ui-snapshot.mjs test/ui-model.mjs test/client-bundle.mjs && node test/smoke.mjs"
+    "test": "node --test \"test/*.mjs\""
   },
   "dsh": {
     "manifestVersion": 1,

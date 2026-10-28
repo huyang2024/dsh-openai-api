@@ -339,13 +339,13 @@ test("a key-protected surface counts as healthy and hides the button", async () 
 	assert.equal(textOf(settled).includes("检测"), false);
 });
 
-test("reopening reuses the descriptor and only re-probes", async () => {
+test("reopening refreshes the descriptor without blanking the address", async () => {
 	const harness = createHarness({ open: true });
 	await harness.settle();
 	assert.deepEqual(harness.calls, ["http://127.0.0.1:57781/api/openai-api/status", "http://127.0.0.1:57781/v1/models"]);
 
-	// Collapse and open again: the render is already complete, so no reload and
-	// no loading state can flash.
+	// Collapse and open again: the descriptor is refreshed (a host may have moved
+	// to another port) and the probe re-runs, but the row keeps its values.
 	const reopened = await harness.reopen();
 	const text = textOf(reopened).join("\n");
 	assert.equal(text.includes("读取中…"), false);
@@ -353,8 +353,9 @@ test("reopening reuses the descriptor and only re-probes", async () => {
 	assert.deepEqual(harness.calls, [
 		"http://127.0.0.1:57781/api/openai-api/status",
 		"http://127.0.0.1:57781/v1/models",
+		"http://127.0.0.1:57781/api/openai-api/status",
 		"http://127.0.0.1:57781/v1/models",
-	], "the descriptor is read once per session; the probe re-runs per open");
+	], "each open re-reads the route and re-probes");
 });
 
 test("a malformed descriptor is reported rather than rendered", async () => {
