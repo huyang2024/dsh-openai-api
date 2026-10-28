@@ -7,16 +7,12 @@
 .dsh-openai-entry {
 	box-sizing: border-box;
 	width: 100%;
-	margin: 0;
-	border: 0;
 	border-radius: var(--dsw-radius-lg, 12px);
 	background: 0 0;
 	color: var(--dsw-alias-label-primary, #24272d);
 }
 
-.dsh-openai-entry *,
-.dsh-openai-entry *::before,
-.dsh-openai-entry *::after {
+.dsh-openai-entry * {
 	box-sizing: border-box;
 }
 
@@ -272,7 +268,6 @@
 	width: 36px;
 	height: 36px;
 	border-radius: 50%;
-	background: 0 0;
 	overflow: visible;
 }
 

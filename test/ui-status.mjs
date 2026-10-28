@@ -179,18 +179,21 @@ test("missing, unsupported, or not-ready origins remain null", async () => {
 	}
 });
 
-test("older contexts without inject quietly skip, without touching config or agents", () => {
+test("host faces this plugin cannot use are skipped quietly", () => {
+	// No injection support at all: nothing is read, not even the config.
 	const unreadable = new Proxy({}, { get() { throw new Error("must not be read"); } });
 	for (const ctx of [undefined, null, {}, { inject: null }]) {
 		assert.equal(mountUiStatus(ctx, unreadable, unreadable), undefined);
 	}
-});
 
-test("absent Connection waits; older Connection faces quietly omit the route", () => {
+	// Injection exists but the service is not up yet: the handle is returned and
+	// no route is registered until Connection arrives.
 	const env = harness();
 	mountUiStatus(env.ctx, config(), {});
 	assert.equal(env.activeRoutes.size, 0, "no route before the service exists");
 	assert.equal(env.registrationCalls.length, 0);
+
+	// Older or partial Connection faces simply have no registry to register into.
 	for (const scoped of [{}, { connection: {} }, { connection: { fetch: {} } }]) {
 		assert.doesNotThrow(() => mountUiStatus({
 			inject(keys, callback) {

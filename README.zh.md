@@ -80,9 +80,7 @@ dsh plugin --profile web add file:/absolute/path/to/dsh-openai-api
 
 桌面端页面经由应用通道访问，面板显示的是可复制到其它程序的**本机 HTTP 地址**，检测仍走当前页面。面板不展示任何密钥，只显示是否已配置。
 
-面板读取一份白名单描述，主要来自 `/api/openai-api/status`：它注册在 DSH Connection 服务上，沿用宿主的本机/来源校验、浏览器鉴权与 owner 校验，桌面端（`dsh-app:` 页面）经应用通道同样可用。
-
-宿主若支持 `webserver/index-inject`，还会把同一对象作为启动快照注入已认证首页，作为请求不可用时的兜底；当前桌面端走的是状态路由。
+面板每次展开读取 `/api/openai-api/status`：它注册在 DSH Connection 服务上，沿用宿主的本机/来源校验、浏览器鉴权与 owner 校验，桌面端（`dsh-app:` 页面）经应用通道同样可用；读数失败时保留已有内容并显示原因。
 
 描述只包含 `pathPrefix`、`model`、`authRequired`、监听地址与端口，不含密钥、provider 或 cwd。读取失败时面板会显示具体原因和「重试」，OpenAI 接口不受影响。
 

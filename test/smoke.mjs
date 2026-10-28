@@ -121,6 +121,23 @@ async function listen(fetchLike) {
 	return { server, url: `http://127.0.0.1:${server.address().port}` };
 }
 
+/**
+ * Drive one case against a freshly applied plugin served over loopback.
+ *
+ * @param config - plugin configuration for this case.
+ * @param body - receives (env, url) and owns its assertions.
+ * @param decorate - optional wrapper around the request handler.
+ */
+async function withPlugin(config, body, decorate = (handler) => handler) {
+	const env = makeCtx(config);
+	const { server, url } = await listen(decorate((req, res) => env.routes.get(new URL(req.url, "http://x").pathname)(req, res)));
+	try {
+		await body(env, url);
+	} finally {
+		server.close();
+	}
+}
+
 async function request(url, path, { method = "GET", body, headers = {} } = {}) {
 	const opts = { method, headers: { ...headers } };
 	if (body !== undefined) {
@@ -230,59 +247,37 @@ async function main() {
 		//#endregion
 
 		//#region preset header resolves and joins
-		{
-			const presEnv = makeCtx({});
-			const presServer = await listen((req, res) => presEnv.routes.get(new URL(req.url, "http://x").pathname)(req, res));
-			try {
-				presEnv.setTurn({ text: "hi", usage: { inputTokens: 1, outputTokens: 1 }, reason: { kind: "stop" }, turn: 1 });
-				const res = await request(presServer.url, "/v1/chat/completions", { method: "POST", body: { messages: [{ role: "user", content: "hi" }] }, headers: { "x-agent-preset": "code" } });
-				assert.strictEqual(res.status, 200);
-				assert.strictEqual(presEnv.createLog[0].meta.agentPreset, "code");
-				console.log("preset header join OK");
-			} finally {
-				presServer.server.close();
-			}
-		}
+		await withPlugin({}, async (env, url) => {
+			env.setTurn({ text: "hi", usage: { inputTokens: 1, outputTokens: 1 }, reason: { kind: "stop" }, turn: 1 });
+			const res = await request(url, "/v1/chat/completions", { method: "POST", body: { messages: [{ role: "user", content: "hi" }] }, headers: { "x-agent-preset": "code" } });
+			assert.strictEqual(res.status, 200);
+			assert.strictEqual(env.createLog[0].meta.agentPreset, "code");
+			console.log("preset header join OK");
+		});
 		//#endregion
 
 		//#region apiKeys auth
-		{
-			const keyEnv = makeCtx({ apiKeys: ["local-key"] });
-			const keyServer = await listen((req, res) => keyEnv.routes.get(new URL(req.url, "http://x").pathname)(req, res));
-			try {
-				const anonymous = await fetch(`${keyServer.url}/v1/models`);
-				assert.strictEqual(anonymous.status, 401);
-				const wrong = await request(keyServer.url, "/v1/models", { headers: { authorization: "Bearer wrong" } });
-				assert.strictEqual(wrong.status, 401);
-				keyEnv.setTurn({ text: "ok", usage: { inputTokens: 1, outputTokens: 1 }, reason: { kind: "stop" }, turn: 1 });
-				const chat = await request(keyServer.url, "/v1/chat/completions", { method: "POST", body: { messages: [{ role: "user", content: "hi" }] }, headers: { authorization: "Bearer local-key" } });
-				assert.strictEqual(chat.status, 200);
-				const models = await request(keyServer.url, "/v1/models", { headers: { authorization: "Bearer local-key" } });
-				assert.strictEqual(models.status, 200);
-				console.log("apiKeys auth OK");
-			} finally {
-				keyServer.server.close();
-			}
-		}
+		await withPlugin({ apiKeys: ["local-key"] }, async (env, url) => {
+			assert.strictEqual((await fetch(`${url}/v1/models`)).status, 401);
+			assert.strictEqual((await request(url, "/v1/models", { headers: { authorization: "Bearer wrong" } })).status, 401);
+			env.setTurn({ text: "ok", usage: { inputTokens: 1, outputTokens: 1 }, reason: { kind: "stop" }, turn: 1 });
+			const chat = await request(url, "/v1/chat/completions", { method: "POST", body: { messages: [{ role: "user", content: "hi" }] }, headers: { authorization: "Bearer local-key" } });
+			assert.strictEqual(chat.status, 200);
+			assert.strictEqual((await request(url, "/v1/models", { headers: { authorization: "Bearer local-key" } })).status, 200);
+			console.log("apiKeys auth OK");
+		});
 		//#endregion
 
 		//#region loopback-only when no apiKeys: a non-loopback peer is refused
-		{
-			const loopEnv = makeCtx({});
-			const loopServer = await listen((req, res) => {
-				// Pretend the connection came from a LAN peer by shadowing the
-				// read-only remoteAddress getter on the socket instance.
-				Object.defineProperty(req.socket, "remoteAddress", { value: "10.0.0.5", configurable: true });
-				loopEnv.routes.get(new URL(req.url, "http://x").pathname)(req, res);
-			});
-			try {
-				const res = await fetch(`${loopServer.url}/v1/models`);
-				assert.strictEqual(res.status, 401);
-				console.log("loopback-only guard OK");
-			} finally {
-				loopServer.server.close();
-			}
-		}
+		await withPlugin({}, async (env, url) => {
+			assert.strictEqual((await fetch(`${url}/v1/models`)).status, 401);
+			console.log("loopback-only guard OK");
+		}, (handler) => (req, res) => {
+			// Pretend the connection came from a LAN peer by shadowing the
+			// read-only remoteAddress getter on the socket instance.
+			Object.defineProperty(req.socket, "remoteAddress", { value: "10.0.0.5", configurable: true });
+			handler(req, res);
+		});
 		//#endregion
 
 		//#region tools & tool-role rejected (agent owns tool use)
@@ -297,22 +292,16 @@ async function main() {
 		//#endregion
 
 		//#region unknown preset -> 400 with roster
-		{
-			const unknownEnv = makeCtx({});
-			unknownEnv.ctx.agentPresets.resolve = async (id) => {
+		await withPlugin({}, async (env, url) => {
+			env.ctx.agentPresets.resolve = async (id) => {
 				if (id !== undefined && id !== "standard" && id !== "code") throw new Error("unknown preset");
 				return { id: id ?? "standard" };
 			};
-			const ukServer = await listen((req, res) => unknownEnv.routes.get(new URL(req.url, "http://x").pathname)(req, res));
-			try {
-				const res = await request(ukServer.url, "/v1/chat/completions", { method: "POST", body: { messages: [{ role: "user", content: "hi" }] }, headers: { "x-agent-preset": "nope" } });
-				assert.strictEqual(res.status, 400);
-				assert.match(JSON.parse(res.text).error.message, /available presets/);
-				console.log("unknown preset 400 OK");
-			} finally {
-				ukServer.server.close();
-			}
-		}
+			const res = await request(url, "/v1/chat/completions", { method: "POST", body: { messages: [{ role: "user", content: "hi" }] }, headers: { "x-agent-preset": "nope" } });
+			assert.strictEqual(res.status, 400);
+			assert.match(JSON.parse(res.text).error.message, /available presets/);
+			console.log("unknown preset 400 OK");
+		});
 		//#endregion
 
 		//#region /v1/responses non-stream + stream
@@ -423,36 +412,28 @@ async function main() {
 		//#endregion
 
 		//#region an explicit empty apiKeys list behaves like omitting it
-		{
-			const keyless = makeCtx({ apiKeys: [] });
-			const keylessServer = await listen((req, res) => keyless.routes.get(new URL(req.url, "http://x").pathname)(req, res));
-			try {
-				assert.strictEqual((await request(keylessServer.url, "/v1/models")).status, 200);
-				console.log("explicit empty apiKeys OK");
-			} finally {
-				keylessServer.server.close();
-			}
-		}
+		await withPlugin({ apiKeys: [] }, async (env, url) => {
+			void env;
+			assert.strictEqual((await request(url, "/v1/models")).status, 200);
+			console.log("explicit empty apiKeys OK");
+		});
 		//#endregion
 
 		//#region admission failure answers 500 and leaves no unhandled rejection
-		{
-			const boomEnv = makeCtx({});
-			const create = boomEnv.ctx.agents.create;
-			boomEnv.ctx.agents.create = async (...args) => {
+		await withPlugin({}, async (env, url) => {
+			const create = env.ctx.agents.create;
+			env.ctx.agents.create = async (...args) => {
 				const handle = await create(...args);
 				handle.agent.followup = () => {
 					throw new Error("admission boom");
 				};
 				return handle;
 			};
-			const boomServer = await listen((req, res) => boomEnv.routes.get(new URL(req.url, "http://x").pathname)(req, res));
 			const rejections = [];
 			const onRejection = (reason) => rejections.push(reason);
 			process.on("unhandledRejection", onRejection);
 			try {
-				const res = await request(boomServer.url, "/v1/chat/completions", { method: "POST", body: { messages: [{ role: "user", content: "hi" }] } });
-				assert.strictEqual(res.status, 500);
+				assert.strictEqual((await request(url, "/v1/chat/completions", { method: "POST", body: { messages: [{ role: "user", content: "hi" }] } })).status, 500);
 				// An unhandled rejection surfaces on a later tick, and terminates a
 				// Node host by default.
 				await new Promise((resolve) => setTimeout(resolve, 30));
@@ -460,35 +441,31 @@ async function main() {
 				console.log("admission failure without unhandled rejection OK");
 			} finally {
 				process.off("unhandledRejection", onRejection);
-				boomServer.server.close();
 			}
-		}
+		});
 		//#endregion
 
 		//#region cross-origin fence is independent of the API key
-		{
-			const corsEnv = makeCtx({ apiKeys: ["local-key"], allowedOrigins: ["https://allowed.test"] });
-			const corsServer = await listen((req, res) => corsEnv.routes.get(new URL(req.url, "http://x").pathname)(req, res));
-			try {
+		await withPlugin({ apiKeys: ["local-key"], allowedOrigins: ["https://allowed.test"] }, async (env, url) => {
+			void env;
+			{
 				// A valid key does not buy a foreign browser origin a way in.
-				const foreign = await request(corsServer.url, "/v1/models", { headers: { origin: "https://evil.test", authorization: "Bearer local-key" } });
+				const foreign = await request(url, "/v1/models", { headers: { origin: "https://evil.test", authorization: "Bearer local-key" } });
 				assert.strictEqual(foreign.status, 403);
 
-				const listed = await request(corsServer.url, "/v1/models", { headers: { origin: "https://allowed.test", authorization: "Bearer local-key" } });
+				const listed = await request(url, "/v1/models", { headers: { origin: "https://allowed.test", authorization: "Bearer local-key" } });
 				assert.strictEqual(listed.status, 200);
 				assert.strictEqual(listed.headers.get("access-control-allow-origin"), "https://allowed.test");
 
-				const preflight = await fetch(`${corsServer.url}/v1/chat/completions`, { method: "OPTIONS", headers: { origin: "https://allowed.test", "access-control-request-method": "POST" } });
+				const preflight = await fetch(`${url}/v1/chat/completions`, { method: "OPTIONS", headers: { origin: "https://allowed.test", "access-control-request-method": "POST" } });
 				assert.strictEqual(preflight.status, 204);
 				assert.strictEqual(preflight.headers.get("access-control-allow-origin"), "https://allowed.test");
 
-				const unknownPreflight = await fetch(`${corsServer.url}/v1/chat/completions`, { method: "OPTIONS", headers: { origin: "https://evil.test", "access-control-request-method": "POST" } });
+				const unknownPreflight = await fetch(`${url}/v1/chat/completions`, { method: "OPTIONS", headers: { origin: "https://evil.test", "access-control-request-method": "POST" } });
 				assert.strictEqual(unknownPreflight.status, 403);
-				console.log("cross-origin fence independent of apiKeys OK");
-			} finally {
-				corsServer.server.close();
 			}
-		}
+			console.log("cross-origin fence independent of apiKeys OK");
+		});
 		//#endregion
 
 		//#region teardown disposes held sessions and unmounts routes

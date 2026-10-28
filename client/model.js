@@ -8,31 +8,6 @@
 /** Route the host Connection service owns for the descriptor. */
 export const STATUS_PATH = "/api/openai-api/status";
 
-/** Global the host injects into the authenticated index response. */
-export const SNAPSHOT_GLOBAL = "__DSH_OPENAI_API__";
-
-/**
- * Read the boot-time snapshot the host injected into this page.
- *
- * Preferred over the route: the index response is already authenticated, so
- * there is no request that can fail. Returns null when the snapshot is absent
- * or malformed, and the caller then falls back to the `/api` route.
- */
-export function snapshotFrom(scope) {
-	let raw;
-	try {
-		raw = scope?.[SNAPSHOT_GLOBAL];
-	} catch {
-		return null;
-	}
-	if (raw === undefined || raw === null) return null;
-	try {
-		return parseStatus(raw);
-	} catch {
-		return null;
-	}
-}
-
 /**
  * Resolve the descriptor route against the page itself.
  *

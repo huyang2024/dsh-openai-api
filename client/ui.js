@@ -120,15 +120,11 @@ export function createUi(React, model) {
 			const statusUrl = model.statusUrlFor(window.location.href);
 			void (async () => {
 				try {
-					const embedded = model.snapshotFrom(window);
-					let descriptor = embedded;
-					if (descriptor === null) {
-						// requestJson resolves to `{status, body}` — not a Response.
-						const response = await model.requestJson(window.fetch.bind(window), statusUrl, controller.signal);
-						if (response.status !== 200) throw new Error(`status ${response.status}`);
-						descriptor = model.parseStatus(response.body);
-					}
+					// requestJson resolves to `{status, body}` — not a Response.
+					const response = await model.requestJson(window.fetch.bind(window), statusUrl, controller.signal);
 					if (controller.signal.aborted) return;
+					if (response.status !== 200) throw new Error(`status ${response.status}`);
+					const descriptor = model.parseStatus(response.body);
 					const addresses = model.resolveAddresses(descriptor, window.location.href);
 					setLoad({ phase: "ready", ...addresses });
 					// Expanding is the request to know whether the surface answers.
@@ -233,12 +229,12 @@ export function createUi(React, model) {
 					// One stable skeleton from the first frame: the values fill in
 					// place, so expanding never reflows or flashes.
 					load.phase === "error"
-						? h("div", { className: "dsh-openai-detail" },
+						? h(React.Fragment, null,
 							h("p", { className: "dsh-openai-note" }, `无法读取接入信息：${reasonText(load.message)}`),
 							h("p", { className: "dsh-openai-note" }, load.statusUrl ?? ""),
 							h("button", { type: "button", className: "dsh-openai-button", onClick: () => setAttempt((value) => value + 1) }, "重试"),
 						)
-						: h("div", { className: "dsh-openai-detail" },
+						: h(React.Fragment, null,
 							h("label", { className: "dsh-openai-label", htmlFor: "dsh-openai-base" }, "接入地址 · Base URL"),
 							h("div", { className: "dsh-openai-address-row" },
 								h("input", {

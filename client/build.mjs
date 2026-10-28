@@ -24,7 +24,7 @@ const ROOT = new URL("../", import.meta.url);
 const read = (path) => readFileSync(fileURLToPath(new URL(path, ROOT)), "utf8");
 
 /** The model namespace object the other sources expect, in export order. */
-const MODEL_EXPORTS = ["STATUS_PATH", "SNAPSHOT_GLOBAL", "statusUrlFor", "snapshotFrom", "parseStatus", "resolveAddresses", "requestJson", "probeResult", "curlExample"];
+const MODEL_EXPORTS = ["STATUS_PATH", "statusUrlFor", "parseStatus", "resolveAddresses", "requestJson", "probeResult", "curlExample"];
 
 /**
  * Fail the build when the UI reaches for a model helper the namespace omits.

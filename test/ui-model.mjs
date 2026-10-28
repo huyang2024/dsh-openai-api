@@ -98,18 +98,6 @@ test("statusUrlFor resolves at the server root on every carrier", () => {
 	assert.equal(model.statusUrlFor("dsh-app://app/"), "dsh-app://app/api/openai-api/status");
 });
 
-test("snapshotFrom reads the injected page global and never throws", () => {
-	const scope = { [model.SNAPSHOT_GLOBAL]: descriptor() };
-	assert.deepEqual(model.snapshotFrom(scope), model.parseStatus(descriptor()));
-	assert.equal(model.snapshotFrom({}), null);
-	assert.equal(model.snapshotFrom({ [model.SNAPSHOT_GLOBAL]: { schemaVersion: 99 } }), null);
-	assert.equal(model.snapshotFrom({ [model.SNAPSHOT_GLOBAL]: "nope" }), null);
-	assert.equal(model.snapshotFrom(undefined), null);
-	const hostile = {};
-	Object.defineProperty(hostile, model.SNAPSHOT_GLOBAL, { get() { throw new Error("boom"); } });
-	assert.equal(model.snapshotFrom(hostile), null);
-});
-
 test("requestJson returns the status and parses JSON only when it is JSON", async () => {
 	const jsonFetcher = async (url, init) => {
 		assert.equal(url, "http://127.0.0.1:57781/v1/models");

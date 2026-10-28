@@ -80,9 +80,7 @@ In the collapsed 56px rail the row becomes an icon button and the detail floats 
 
 On Desktop the page is served over the app carrier, so the panel shows the **local HTTP address** to paste into other programs while the check still uses the current page. The panel never shows a key, only whether one is configured.
 
-The panel reads an allowlisted descriptor, primarily from `/api/openai-api/status`: registered on the DSH Connection service, it inherits the host's loopback/origin trust checks, browser authentication, and owner-only access, and it works from the Desktop `dsh-app:` page through the app carrier.
-
-Where the host supports `webserver/index-inject`, the same object is also injected into the authenticated index as a boot snapshot, as a fallback when a request cannot be made; Desktop currently uses the route.
+The panel reads an allowlisted descriptor from `/api/openai-api/status` on every open: registered on the DSH Connection service, it inherits the host's loopback/origin trust checks, browser authentication, and owner-only access, and it works from the Desktop `dsh-app:` page through the app carrier. A failed read keeps the values already on screen and shows the reason.
 
 The descriptor carries only `pathPrefix`, `model`, `authRequired`, the listener origin, and the port — never a key, provider, or cwd. A failed read shows its reason and a retry button; the OpenAI endpoints are unaffected.
 
