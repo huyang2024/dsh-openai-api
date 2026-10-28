@@ -360,6 +360,32 @@ async function main() {
 		}
 		//#endregion
 
+		//#region cross-origin fence is independent of the API key
+		{
+			const corsEnv = makeCtx({ apiKeys: ["local-key"], allowedOrigins: ["https://allowed.test"] });
+			const corsServer = await listen((req, res) => corsEnv.routes.get(new URL(req.url, "http://x").pathname)(req, res));
+			try {
+				// A valid key does not buy a foreign browser origin a way in.
+				const foreign = await request(corsServer.url, "/v1/models", { headers: { origin: "https://evil.test", authorization: "Bearer local-key" } });
+				assert.strictEqual(foreign.status, 403);
+
+				const listed = await request(corsServer.url, "/v1/models", { headers: { origin: "https://allowed.test", authorization: "Bearer local-key" } });
+				assert.strictEqual(listed.status, 200);
+				assert.strictEqual(listed.headers.get("access-control-allow-origin"), "https://allowed.test");
+
+				const preflight = await fetch(`${corsServer.url}/v1/chat/completions`, { method: "OPTIONS", headers: { origin: "https://allowed.test", "access-control-request-method": "POST" } });
+				assert.strictEqual(preflight.status, 204);
+				assert.strictEqual(preflight.headers.get("access-control-allow-origin"), "https://allowed.test");
+
+				const unknownPreflight = await fetch(`${corsServer.url}/v1/chat/completions`, { method: "OPTIONS", headers: { origin: "https://evil.test", "access-control-request-method": "POST" } });
+				assert.strictEqual(unknownPreflight.status, 403);
+				console.log("cross-origin fence independent of apiKeys OK");
+			} finally {
+				corsServer.server.close();
+			}
+		}
+		//#endregion
+
 		//#region teardown disposes held sessions and routes
 		{
 			const before = env.teardownEffects?.length ?? 0;
