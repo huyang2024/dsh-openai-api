@@ -1,20 +1,36 @@
 {
   "name": "dsh-openai-api",
-  "description": "OpenAI-compatible HTTP surface backed by DSH agent sessions: POST /v1/chat/completions, POST /v1/responses, GET /v1/models over the harness webServer + agents services",
-  "version": "0.2.0",
+  "description": "OpenAI-compatible HTTP surface backed by DSH agent sessions: POST /v1/chat/completions, POST /v1/responses, GET /v1/models over the harness webServer + agents services, plus a sidebar panel showing the base URL",
+  "version": "0.3.0",
   "type": "module",
   "main": "lib/index.js",
   "exports": {
-    ".": "./lib/index.js"
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./package.json": "./package.json"
   },
   "files": [
     "lib/index.js",
+    "lib/ui-status.js",
+    "lib/client.js",
+    "client/build.mjs",
+    "client/model.js",
+    "client/ui.js",
+    "client/entry.js",
+    "client/styles.css",
     "cordis.patch.yml"
   ],
+  "scripts": {
+    "build:client": "node client/build.mjs",
+    "test": "node --test test/ui-status.mjs test/ui-snapshot.mjs test/ui-model.mjs test/client-bundle.mjs && node test/smoke.mjs"
+  },
   "dsh": {
     "manifestVersion": 1,
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web"
     }
   },
   "engines": {

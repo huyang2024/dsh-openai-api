@@ -1,0 +1,336 @@
+/*
+ * Mirrors the harness's own collapsible row (the conversation To-do panel):
+ * a rounded card holding a full-width header button — lead icon, title,
+ * muted progress, chevron — with the detail revealed underneath.
+ */
+
+.dsh-openai-entry {
+	box-sizing: border-box;
+	width: 100%;
+	margin: 0;
+	border: 0;
+	border-radius: var(--dsw-radius-lg, 12px);
+	background: 0 0;
+	color: var(--dsw-alias-label-primary, #24272d);
+}
+
+.dsh-openai-entry *,
+.dsh-openai-entry *::before,
+.dsh-openai-entry *::after {
+	box-sizing: border-box;
+}
+
+.dsh-openai-body {
+	display: flex;
+	/* The row lives at the sidebar foot, so the reveal grows upwards: the DOM
+	   keeps the toggle first (tab and screen-reader order) while the detail is
+	   painted above it. */
+	flex-direction: column-reverse;
+	gap: 8px;
+	padding: 6px 12px;
+	justify-content: flex-start;
+}
+
+.dsh-openai-header {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	width: 100%;
+	padding: 0;
+	border: 0;
+	background: 0 0;
+	color: inherit;
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
+.dsh-openai-lead,
+.dsh-openai-chevron {
+	flex: none;
+	display: grid;
+	place-items: center;
+	color: var(--dsw-alias-label-tertiary, #69717d);
+}
+
+.dsh-openai-icon {
+	display: block;
+}
+
+.dsh-openai-title {
+	flex: none;
+	font-size: 13px;
+	font-weight: 500;
+	line-height: 24px;
+	color: var(--dsw-alias-label-primary, #24272d);
+}
+
+.dsh-openai-progress {
+	flex: auto;
+	min-width: 0;
+	overflow: hidden;
+	font-size: 13px;
+	font-weight: 400;
+	line-height: 20px;
+	color: var(--dsw-alias-label-tertiary, #69717d);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	font-variant-numeric: tabular-nums;
+}
+
+.dsh-openai-header:focus-visible,
+.dsh-openai-detail button:focus-visible,
+.dsh-openai-detail input:focus-visible,
+.dsh-openai-detail summary:focus-visible {
+	outline: var(--dsw-focus-ring-width, 2px) solid var(--dsw-focus-ring-color, var(--dsw-alias-brand-primary, #4b6bda));
+	outline-offset: 2px;
+}
+
+.dsh-openai-detail {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	min-width: 0;
+	/* The list above gives up its height to the reveal, so this cap only keeps
+	   a very tall detail from swallowing the whole column. */
+	max-height: min(52vh, 340px);
+	overflow-y: auto;
+	overscroll-behavior: contain;
+	--dsh-scrollbar-thumb: var(--dsw-alias-scrollbar-bg-l2);
+	--dsh-scrollbar-thumb-hover: var(--dsw-alias-scrollbar-hover-l2);
+}
+
+.dsh-openai-checkrow {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	justify-content: space-between;
+}
+
+.dsh-openai-checkrow .dsh-openai-status {
+	flex: 1;
+	min-width: 0;
+}
+
+.dsh-openai-label {
+	font-size: 12px;
+	line-height: 18px;
+	color: var(--dsw-alias-label-tertiary, #69717d);
+}
+
+.dsh-openai-address-row {
+	display: flex;
+	align-items: stretch;
+	gap: 6px;
+}
+
+.dsh-openai-address {
+	flex: 1;
+	min-width: 0;
+	width: 100%;
+	padding: 6px 8px;
+	border: 1px solid var(--dsw-alias-border-l2, #e3e5ea);
+	border-radius: var(--dsw-radius-md, 8px);
+	background: var(--dsw-alias-bg-module-platform, #f0f1f4);
+	color: inherit;
+	font: 12px/18px ui-monospace, SFMono-Regular, Consolas, monospace;
+	text-overflow: ellipsis;
+}
+
+.dsh-openai-button {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	flex: none;
+	min-height: 30px;
+	padding: 5px 10px;
+	border: 1px solid var(--dsw-alias-border-l2, #e3e5ea);
+	border-radius: var(--dsw-radius-md, 8px);
+	background: var(--dsw-alias-bg-module-platform, #f0f1f4);
+	color: inherit;
+	font: inherit;
+	font-size: 12px;
+	line-height: 18px;
+	white-space: nowrap;
+	cursor: pointer;
+	transition: background-color 140ms ease, transform 120ms ease-out;
+}
+
+.dsh-openai-button:disabled {
+	cursor: default;
+	opacity: 0.55;
+}
+
+.dsh-openai-button:not(:disabled):active {
+	transform: scale(0.97);
+}
+
+.dsh-openai-meta {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 4px 14px;
+	margin: 0;
+	font-size: 12px;
+	line-height: 18px;
+	color: var(--dsw-alias-label-secondary, #505966);
+}
+
+.dsh-openai-meta > div {
+	display: flex;
+	gap: 5px;
+	min-width: 0;
+}
+
+.dsh-openai-meta dt,
+.dsh-openai-meta dd {
+	margin: 0;
+}
+
+.dsh-openai-meta dd {
+	color: var(--dsw-alias-label-primary, #24272d);
+	overflow-wrap: anywhere;
+}
+
+.dsh-openai-note {
+	margin: 0;
+	font-size: 12px;
+	line-height: 18px;
+	color: var(--dsw-alias-label-tertiary, #69717d);
+	overflow-wrap: anywhere;
+}
+
+.dsh-openai-status {
+	display: flex;
+	align-items: center;
+	gap: 7px;
+	min-height: 18px;
+	font-size: 12px;
+	line-height: 18px;
+	color: var(--dsw-alias-label-secondary, #505966);
+}
+
+.dsh-openai-dot {
+	flex: none;
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--dsw-alias-label-tertiary, #69717d);
+}
+
+/* Reachable is blue, everything else is red; both are theme tokens, so they
+   hold up in either theme instead of being picked per appearance. */
+.dsh-openai-status[data-tone="ok"] .dsh-openai-dot,
+.dsh-openai-status[data-tone="auth"] .dsh-openai-dot {
+	background: var(--dsw-alias-state-business-primary, var(--dsw-static-blue-500, #3b82f6));
+}
+
+.dsh-openai-status[data-tone="error"] .dsh-openai-dot {
+	background: var(--dsw-alias-state-error-primary, #cf4c4c);
+}
+
+.dsh-openai-details {
+	font-size: 12px;
+	line-height: 18px;
+}
+
+.dsh-openai-details summary {
+	cursor: pointer;
+	user-select: none;
+	color: var(--dsw-alias-label-tertiary, #69717d);
+}
+
+.dsh-openai-code {
+	margin: 8px 0;
+	padding: 8px;
+	border-radius: var(--dsw-radius-md, 8px);
+	background: var(--dsw-alias-bg-module-platform, #f0f1f4);
+	font: 11px/17px ui-monospace, SFMono-Regular, Consolas, monospace;
+	white-space: pre-wrap;
+	overflow-wrap: anywhere;
+}
+
+.dsh-openai-endpoints {
+	display: grid;
+	gap: 6px;
+	margin: 8px 0 0;
+}
+
+.dsh-openai-endpoints dt {
+	color: var(--dsw-alias-label-tertiary, #69717d);
+}
+
+.dsh-openai-endpoints dd {
+	margin: 2px 0 0;
+	font: 11px/16px ui-monospace, SFMono-Regular, Consolas, monospace;
+	overflow-wrap: anywhere;
+	user-select: text;
+}
+
+/* The 56px rail has no room for an inline reveal, so its detail floats beside
+   the rail — the placement the harness's own footer panel uses there. */
+.dsh-openai-entry[data-wide="false"] {
+	width: 36px;
+	height: 36px;
+	border-radius: 50%;
+	background: 0 0;
+	overflow: visible;
+}
+
+.dsh-openai-entry[data-wide="false"] .dsh-openai-body {
+	padding: 0;
+}
+
+.dsh-openai-entry[data-wide="false"] .dsh-openai-header {
+	justify-content: center;
+	gap: 0;
+	width: 36px;
+	height: 36px;
+	border-radius: 50%;
+}
+
+.dsh-openai-entry[data-wide="false"] .dsh-openai-title,
+.dsh-openai-entry[data-wide="false"] .dsh-openai-progress,
+.dsh-openai-entry[data-wide="false"] .dsh-openai-chevron {
+	display: none;
+}
+
+.dsh-openai-entry[data-wide="false"] .dsh-openai-detail {
+	position: fixed;
+	left: 64px;
+	bottom: 12px;
+	z-index: 60;
+	width: min(320px, calc(100vw - 80px));
+	max-height: 60vh;
+	padding: 12px;
+	border-radius: var(--dsw-radius-lg, 12px);
+	background: var(--dsw-specific-menu, var(--dsw-alias-bg-base, #fff));
+	backdrop-filter: var(--dsw-menu-backdrop-filter, none);
+	box-shadow: var(--dsw-elevation-prominent, 0 8px 32px #18233b1a);
+	overflow-y: auto;
+}
+
+@media (hover: hover) {
+	/* The same fill the settings and account rows use when pointed at. */
+	.dsh-openai-entry:hover {
+		background: var(--dsw-alias-interactive-bg-hover, #eceef2);
+	}
+
+	.dsh-openai-button:not(:disabled):hover {
+		background: var(--dsw-alias-interactive-bg-hover, #eceef2);
+	}
+}
+
+/* Kept while the row is open, so the block stays visibly selected. */
+.dsh-openai-entry[data-open="true"] {
+	background: var(--dsw-alias-interactive-bg-hover, #eceef2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.dsh-openai-button {
+		transition: none;
+	}
+
+	.dsh-openai-button:not(:disabled):active {
+		transform: none;
+	}
+}
