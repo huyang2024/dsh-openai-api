@@ -22,7 +22,7 @@
   ],
   "scripts": {
     "build:client": "node client/build.mjs",
-    "test": "node --test \"test/*.mjs\""
+    "test": "node --test"
   },
   "dsh": {
     "manifestVersion": 1,

@@ -28,33 +28,23 @@ function renderTree(node) {
 	return { ...node, children: (node.children ?? []).map(renderTree) };
 }
 
-/** Find the first rendered node carrying the given class. */
-function findByClass(node, className) {
+function findNode(node, matches) {
 	if (node === null || typeof node !== "object") return null;
-	if (typeof node.props?.className === "string" && node.props.className.split(/\s+/).includes(className)) return node;
+	if (matches(node)) return node;
 	for (const child of node.children ?? []) {
-		const found = findByClass(child, className);
-		if (found !== null) return found;
+		const found = findNode(child, matches);
+		if (found) return found;
 	}
 	return null;
 }
+const findByClass = (node, name) => findNode(node, (item) => item.props?.className?.split(/\s+/).includes(name));
+const findTag = (node, tag) => findNode(node, (item) => item.type === tag);
 
 /** Collect every string in a rendered tree. */
 function textOf(node) {
 	if (typeof node === "string") return [node];
 	if (node === null || typeof node !== "object") return [];
 	return (node.children ?? []).flatMap(textOf);
-}
-
-/** Find the first rendered node of a tag, e.g. the address input. */
-function findTag(node, tag) {
-	if (node === null || typeof node !== "object") return null;
-	if (node.type === tag) return node;
-	for (const child of node.children ?? []) {
-		const found = findTag(child, tag);
-		if (found !== null) return found;
-	}
-	return null;
 }
 
 /**
@@ -71,6 +61,7 @@ function createHarness(options = {}) {
 	const hooks = [];
 	const effects = [];
 	const ranEffects = new Set();
+	const cleanups = [];
 	let cursor = 0;
 	let component = null;
 	let registration = null;
@@ -110,23 +101,13 @@ function createHarness(options = {}) {
 		useEffect(effect) {
 			effects[cursor++] = effect;
 		},
-		useLayoutEffect(effect) {
-			effects[cursor++] = effect;
-		},
-		useCallback(callback) {
-			cursor++;
-			return callback;
-		},
 	};
 
 	const styles = [];
-	const body = { tag: "body" };
 	const document = {
-		body,
 		getElementById: () => null,
 		createElement: () => ({ id: "", textContent: "" }),
 		head: { appendChild: (element) => styles.push(element) },
-		activeElement: null,
 		addEventListener: () => {},
 		removeEventListener: () => {},
 	};
@@ -134,12 +115,9 @@ function createHarness(options = {}) {
 	const window = {
 		__ModuleLoader__: { load: (value) => { registration = value; } },
 		location: { href: "http://127.0.0.1:57781/", origin: "http://127.0.0.1:57781" },
-		innerWidth: 1280,
-		innerHeight: 800,
-		addEventListener: () => {},
-		removeEventListener: () => {},
-		fetch: async (url) => {
+		fetch: async (url, init) => {
 			calls.push(String(url));
+			if (options.fetch) return options.fetch(url, init);
 			const models = String(url).endsWith("/models");
 			const status = models ? (options.modelsStatus ?? 200) : (options.status ?? 200);
 			const ok = status === 200;
@@ -158,7 +136,6 @@ function createHarness(options = {}) {
 	const harness = {
 		registration,
 		styles,
-		body,
 		window,
 		calls,
 		injectedInto: null,
@@ -168,9 +145,15 @@ function createHarness(options = {}) {
 			cursor = 0;
 			return renderTree(component(props));
 		},
-		/** Re-run the effects the way a reopen would, then settle again. */
-		async reopen(props = { wide: true }) {
+		close() {
+			for (const dispose of cleanups.splice(0)) dispose?.();
 			ranEffects.clear();
+			hooks[0].set(false);
+			return this.render();
+		},
+		async reopen(props = { wide: true }) {
+			this.close();
+			hooks[0].set(true);
 			return this.settle(props);
 		},
 		/** Run each effect once, let its async work land, then re-render. */
@@ -179,7 +162,7 @@ function createHarness(options = {}) {
 			for (let slot = 0; slot < effects.length; slot++) {
 				if (ranEffects.has(slot) || typeof effects[slot] !== "function") continue;
 				ranEffects.add(slot);
-				effects[slot]();
+				cleanups.push(effects[slot]());
 			}
 			await new Promise((resolve) => setTimeout(resolve, 30));
 			return this.render(props);
@@ -196,7 +179,6 @@ function createHarness(options = {}) {
 			register: (slotOptions, value) => { component = value; harness.options = slotOptions; return () => {}; },
 		},
 	});
-	harness.registration = registration;
 	return harness;
 }
 
@@ -356,6 +338,36 @@ test("reopening refreshes the descriptor without blanking the address", async ()
 		"http://127.0.0.1:57781/api/openai-api/status",
 		"http://127.0.0.1:57781/v1/models",
 	], "each open re-reads the route and re-probes");
+});
+
+test("a failed refresh keeps the last address and offers detection instead of hanging", async () => {
+	const options = { open: true };
+	const harness = createHarness(options);
+	await harness.settle();
+	options.status = 503;
+	const tree = await harness.reopen();
+	assert.equal(findTag(tree, "input").props.value, "http://127.0.0.1:57781/v1");
+	assert.equal(textOf(tree).includes("正在检测…"), false);
+	assert.equal(textOf(tree).includes("检测"), true);
+	harness.close();
+});
+
+test("closing aborts a pending probe and ignores its late result", async () => {
+	const harness = createHarness({ open: true });
+	await harness.settle();
+	let finish;
+	let signal;
+	harness.window.fetch = async (url, init) => {
+		if (!url.endsWith("/models")) return { status: 200, ok: true, headers: { get: () => "application/json" }, json: async () => DESCRIPTOR };
+		signal = init.signal;
+		return new Promise((resolve) => { finish = resolve; });
+	};
+	await harness.reopen();
+	harness.close();
+	assert.equal(signal.aborted, true);
+	finish({ status: 404, ok: false, headers: { get: () => "application/json" } });
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(findByClass(harness.render(), "dsh-openai-detail"), null);
 });
 
 test("a malformed descriptor is reported rather than rendered", async () => {

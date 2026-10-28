@@ -3,26 +3,26 @@
  *
  * Drives the real plugin against a faked `agents` service plus faked
  * `session/event` / `agent/inbox/claimed` dispatch. The fake agent emits its
- * turn events from inside `followup` (synchronous claimed + assistant/message,
- * then a microtask turn/end), so the handler's `await completion` resolves
+ * turn events on microtasks queued by `followup`, so the handler's `await completion` resolves
  * naturally while exercising transcript seeding, latest-turn admission,
  * preset resolution, auth, and both wire formats — without a live agent.
  */
 import { createServer } from "node:http";
 import assert from "node:assert";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const mod = await import("../lib/index.js");
+import { apply } from "../lib/index.js";
 
 //#region fakes
 function makeCtx(config) {
+	const directory = realpathSync(mkdtempSync(join(tmpdir(), "openai-api-smoke-")));
 	const listeners = new Map();
 	const routes = new Map();
 	const createLog = [];
 	let lastHandle = null;
-	let turnScript = { text: "Hello world.", usage: { inputTokens: 5, outputTokens: 3, cacheReadTokens: 2 }, reason: { kind: "stop" }, turn: 1 };
+	const turnScript = { text: "Hello world.", usage: { inputTokens: 5, outputTokens: 3, cacheReadTokens: 2 }, reason: { kind: "stop" }, turn: 1 };
 
 	// Emit into the plugin's registered listeners.
 	const emit = (event, ...args) => {
@@ -70,6 +70,15 @@ function makeCtx(config) {
 
 	const env = {
 		turnScript,
+		emit,
+		teardownEffects: [],
+		sessionMapPath: join(directory, "session-map.json"),
+		async dispose() {
+			await Promise.allSettled(env.teardownEffects.splice(0).map((dispose) => dispose()));
+			// Only remove the exact temporary directory this fixture created.
+			assert.strictEqual(realpathSync(directory), directory);
+			rmSync(directory, { recursive: true });
+		},
 		ctx: {
 			agents,
 			webServer: {
@@ -93,17 +102,10 @@ function makeCtx(config) {
 			},
 			effect(fn) {
 				const disposer = fn();
-				env.teardownEffects = env.teardownEffects ?? [];
 				env.teardownEffects.push(disposer);
 				return disposer;
 			},
-			get(name_) {
-				if (name_ === "webServer") return this.webServer;
-				if (name_ === "agents") return this.agents;
-				if (name_ === "agentPresets") return this.agentPresets;
-				if (name_ === "agentDefaultModel") return this.agentDefaultModel;
-				return undefined;
-			},
+			get(name) { return this[name]; },
 		},
 		routes,
 		createLog,
@@ -111,7 +113,14 @@ function makeCtx(config) {
 		setTurn(script) { env.turnScript = script; },
 	};
 	// The session map is real file I/O; keep every case inside a throwaway dir.
-	mod.apply(env.ctx, { sessionMapPath: join(mkdtempSync(join(tmpdir(), "openai-api-smoke-")), "session-map.json"), ...config });
+	try {
+		apply(env.ctx, { sessionMapPath: env.sessionMapPath, ...config });
+	} catch (error) {
+		// Invalid configuration cannot leave a live route or agent behind.
+		assert.strictEqual(realpathSync(directory), directory);
+		rmSync(directory, { recursive: true });
+		throw error;
+	}
 	return env;
 }
 
@@ -134,12 +143,13 @@ async function withPlugin(config, body, decorate = (handler) => handler) {
 	try {
 		await body(env, url);
 	} finally {
-		server.close();
+		await new Promise((resolve) => server.close(resolve));
+		await env.dispose();
 	}
 }
 
 async function request(url, path, { method = "GET", body, headers = {} } = {}) {
-	const opts = { method, headers: { ...headers } };
+	const opts = { method, headers: { ...headers }, signal: AbortSignal.timeout(3000) };
 	if (body !== undefined) {
 		opts.headers["content-type"] = "application/json";
 		opts.body = JSON.stringify(body);
@@ -149,19 +159,18 @@ async function request(url, path, { method = "GET", body, headers = {} } = {}) {
 }
 
 function parseChunkEvents(text) {
-	return text.split("\n\n").filter((block) => block.trim().length > 0).map((block) => ({
-		event: block.match(/^event: (.+)$/m)?.[1] ?? undefined,
-		data: JSON.parse(block.match(/^data: (.*)$/m)?.[1] ?? "[DONE]") || "[DONE]",
-	}));
+	return text.trim().split("\n\n").map((block) => {
+		const data = block.match(/^data: (.*)$/m)[1];
+		return { event: block.match(/^event: (.+)$/m)?.[1], data: data === "[DONE]" ? data : JSON.parse(data) };
+	});
 }
 //#endregion
 
 async function main() {
-	let env = makeCtx({});
-	const handler = (req, res) => env.routes.get(new URL(req.url, "http://x").pathname)(req, res);
-	const { server, url } = await listen(handler);
-
-	try {
+	for (const [key, value] of [["model", ""], ["provider", ""], ["pathPrefix", ""], ["cwd", "relative"], ["sessionMapPath", "relative"], ["apiKeys", [""]], ["allowedOrigins", [""]], ["maxBodyBytes", 1], ["unknown", true]]) {
+		assert.throws(() => makeCtx({ [key]: value }), /openai-api config/);
+	}
+	await withPlugin({}, async (env, url) => {
 		//#region GET /v1/models
 		{
 			const res = await request(url, "/v1/models");
@@ -190,8 +199,6 @@ async function main() {
 			assert.strictEqual(body.usage.prompt_tokens, 9 + 0); // input 9 + cache 0
 			assert.strictEqual(body.usage.total_tokens, 9 + 4);
 			// The first request's full array was rendered into the transcript prompt.
-			const prompt = env.createLog[0] ? env.turnScript.text : "";
-			void prompt;
 			assert.ok(env.lastAgent().lastMessage.content[0].text.includes("[system] You are concise."));
 			assert.ok(env.lastAgent().lastMessage.content[0].text.includes("[user] What is 2+2?"));
 			console.log("chat first-request transcript seed OK");
@@ -229,10 +236,7 @@ async function main() {
 			} });
 			assert.strictEqual(res.status, 200);
 			assert.match(res.text, /^data: /m);
-			const events = res.text.split("\n\n").filter(Boolean).map((block) => {
-				const raw = block.match(/^data: (.*)$/m)[1];
-				return raw === "[DONE]" ? "[DONE]" : JSON.parse(raw);
-			});
+			const events = parseChunkEvents(res.text).map((event) => event.data);
 			const roleFrame = events.find((e) => e.choices?.[0]?.delta?.role === "assistant");
 			const contentFrame = events.find((e) => e.choices?.[0]?.delta?.content);
 			const finishFrame = events.find((e) => e.choices?.[0]?.finish_reason !== null && e.choices?.[0]?.delta?.content === undefined);
@@ -286,7 +290,6 @@ async function main() {
 			const toolsRes = await request(url, "/v1/chat/completions", { method: "POST", body: { messages: [{ role: "user", content: "hi" }], tools: [{ type: "function", function: { name: "f" } }] } });
 			assert.strictEqual(toolsRes.status, 400);
 			assert.match(JSON.parse(toolsRes.text).error.message, /function calling/);
-			// note: this creates an inflight slot in the shared env session; OK.
 			console.log("tools rejected OK");
 		}
 		//#endregion
@@ -308,7 +311,6 @@ async function main() {
 		{
 			env.setTurn({ text: "responses answer", usage: { inputTokens: 6, outputTokens: 2 }, reason: { kind: "stop" }, turn: 1 });
 			const res = await request(url, "/v1/responses", { method: "POST", body: { input: "hello", instructions: "Be brief." } });
-			console.error("RESPONSES res", res.status, res.text.slice(0, 200));
 			assert.strictEqual(res.status, 200);
 			const body = JSON.parse(res.text);
 			assert.strictEqual(body.object, "response");
@@ -320,11 +322,7 @@ async function main() {
 			env.setTurn({ text: "streamed response", usage: { inputTokens: 2, outputTokens: 1 }, reason: { kind: "stop" }, turn: 1 });
 			const sres = await request(url, "/v1/responses", { method: "POST", body: { input: "go", stream: true } });
 			assert.strictEqual(sres.status, 200);
-			const blocks = sres.text.split("\n\n").filter(Boolean).map((block) => {
-				const event = block.match(/^event: (.+)$/m)?.[1];
-				const data = JSON.parse(block.match(/^data: (.*)$/m)[1]);
-				return { event, data };
-			});
+			const blocks = parseChunkEvents(sres.text);
 			const names = blocks.map((b) => b.event);
 			assert.deepStrictEqual(names.slice(0, 2), ["response.created", "response.in_progress"]);
 			assert.ok(names.includes("response.output_text.delta"));
@@ -353,8 +351,8 @@ async function main() {
 			assert.strictEqual(failure.event, "error");
 			assert.strictEqual(failure.data.code, "server_error");
 			assert.match(failure.data.message, /provider unavailable/);
-			var sequence = events.map((event) => event.data.sequence_number);
-			assert.deepStrictEqual(sequence, [...sequence].sort((left, right) => left - right), "sequence numbers keep increasing");
+			const sequence = events.map((event) => event.data.sequence_number);
+			assert.deepStrictEqual(sequence, events.map((_, index) => index + 1), "sequence numbers stay consecutive");
 			assert.strictEqual((await request(url, "/v1/models")).status, 200);
 			env.setTurn({ text: "recovered", reason: { kind: "stop" }, turn: 3 });
 			const recovered = await request(url, "/v1/responses", { method: "POST", body: { input: "retry" } });
@@ -445,6 +443,92 @@ async function main() {
 		});
 		//#endregion
 
+		//#region events stay bound to their exact turn and ordered output
+		await withPlugin({}, async (env, url) => {
+			await request(url, "/v1/chat/completions", { method: "POST", body: { messages: [{ role: "user", content: "seed" }] } });
+			const agent = env.lastAgent();
+			agent.followup = (message) => queueMicrotask(() => {
+				env.emit("agent/inbox/claimed", { agent, message, turn: 7 });
+				env.emit("session/event", agent.session, { type: "unrelated" });
+				for (const [turn, text] of [[8, "wrong turn"], [7, "first"], [7, "second"]]) {
+					env.emit("session/event", agent.session, { type: "assistant/message", data: { turn, message: { content: [{ type: "reasoning", text: "private" }, { type: "text", text }] }, usage: { inputTokens: 2, outputTokens: 1 } } });
+				}
+				env.emit("session/event", agent.session, { type: "turn/end", data: { turn: 7, reason: { kind: "stop" } } });
+			});
+			const result = await request(url, "/v1/chat/completions", { method: "POST", body: { messages: [{ role: "user", content: "go" }] } });
+			assert.equal(result.status, 200);
+			const body = JSON.parse(result.text);
+			assert.equal(body.choices[0].message.content, "first\n\nsecond");
+			assert.deepEqual(body.usage, { prompt_tokens: 4, completion_tokens: 2, total_tokens: 6 });
+		});
+		console.log("ordered output and event isolation OK");
+		//#endregion
+
+		//#region initialization reserves one slot until every awaited setup completes
+		await withPlugin({}, async (env, url) => {
+			let announce, release;
+			const entered = new Promise((resolve) => { announce = resolve; });
+			const blocked = new Promise((resolve) => { release = resolve; });
+			const resolvePreset = env.ctx.agentPresets.resolve;
+			env.ctx.agentPresets.resolve = async (id) => { announce(); await blocked; return resolvePreset(id); };
+			const body = { messages: [{ role: "user", content: "hi" }] };
+			const first = request(url, "/v1/chat/completions", { method: "POST", body });
+			await entered;
+			try {
+				assert.equal((await request(url, "/v1/responses", { method: "POST", body: { input: "hi" } })).status, 409);
+			} finally { release(); }
+			assert.equal((await first).status, 200);
+			assert.equal(env.createLog.length, 1);
+		});
+		console.log("shared initialization gate OK");
+		//#endregion
+
+		//#region creation failures always release the shared admission gate
+		for (const [path, body] of [
+			["/v1/chat/completions", { messages: [{ role: "user", content: "hello" }] }],
+			["/v1/responses", { input: "hello" }],
+		]) {
+			await withPlugin({}, async (env, url) => {
+				const selection = env.ctx.agentDefaultModel.currentSelection;
+				env.ctx.agentDefaultModel.currentSelection = () => { throw new Error("selection failed"); };
+				assert.equal((await request(url, path, { method: "POST", body })).status, 500);
+				env.ctx.agentDefaultModel.currentSelection = selection;
+				assert.equal((await request(url, path, { method: "POST", body })).status, 200);
+				const agent = env.lastAgent();
+				agent.whenIdle = async () => { throw new Error("idle failed"); };
+				assert.equal((await request(url, path, { method: "POST", body })).status, 500);
+				agent.whenIdle = async () => {};
+				assert.equal((await request(url, path, { method: "POST", body })).status, 200, "idle failure must not leave the session stuck at 409");
+			});
+		}
+		console.log("both endpoint gates recover after creation and idle failures OK");
+		//#endregion
+
+		//#region Responses conversion preserves instructions, usage and all tool refusals
+		await withPlugin({}, async (env, url) => {
+			env.setTurn({ text: "ok", usage: { inputTokens: 5, outputTokens: 2, cacheReadTokens: 3, reasoningTokens: 4 }, reason: { kind: "stop" }, turn: 1 });
+			const result = await request(url, "/v1/responses", { method: "POST", body: { input: "hello", instructions: "Be brief." } });
+			assert.equal(result.status, 200);
+			assert.match(env.lastAgent().lastMessage.content[0].text, /\[system\] Be brief\./);
+			assert.deepEqual(JSON.parse(result.text).usage, { input_tokens: 8, output_tokens: 6, total_tokens: 14, input_tokens_details: { cached_tokens: 3 }, output_tokens_details: { reasoning_tokens: 4 } });
+			for (const key of ["tools", "tool_choice", "functions", "function_call"]) {
+				assert.equal((await request(url, "/v1/responses", { method: "POST", body: { input: "hi", [key]: null } })).status, 400);
+			}
+		});
+		console.log("Responses instructions, usage details and tool refusals OK");
+		//#endregion
+
+		//#region session map is private and stays in the fixture directory
+		await withPlugin({ apiKeys: ["test-secret"] }, async (env, url) => {
+			await request(url, "/v1/chat/completions", { method: "POST", headers: { authorization: "Bearer test-secret" }, body: { messages: [{ role: "user", content: "hi" }] } });
+			const content = readFileSync(env.sessionMapPath, "utf8");
+			assert.equal(content.includes("test-secret"), false);
+			assert.match(Object.keys(JSON.parse(content))[0], /^[a-f0-9]{32}$/);
+			if (process.platform !== "win32") assert.equal(statSync(env.sessionMapPath).mode & 0o777, 0o600);
+		});
+		console.log("private session mapping OK");
+		//#endregion
+
 		//#region cross-origin fence is independent of the API key
 		await withPlugin({ apiKeys: ["local-key"], allowedOrigins: ["https://allowed.test"] }, async (env, url) => {
 			void env;
@@ -471,8 +555,6 @@ async function main() {
 		//#region teardown disposes held sessions and unmounts routes
 		{
 			assert.ok((env.teardownEffects?.length ?? 0) >= 1);
-			// The plugin's own teardown is registered last; an earlier slot belongs
-			// to the status snapshot, so indexing 0 would assert nothing.
 			await env.teardownEffects.at(-1)();
 			assert.strictEqual(env.lastAgent().disposed, true, "the held agent is disposed");
 			assert.strictEqual(env.routes.has("/v1/models"), false, "routes are unmounted");
@@ -481,9 +563,7 @@ async function main() {
 		//#endregion
 
 		console.log("\nALL AGENT-BACKED STUB TESTS PASSED");
-	} finally {
-		server.close();
-	}
+	});
 }
 
 main().catch((error) => {

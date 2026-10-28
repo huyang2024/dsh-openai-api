@@ -17,7 +17,7 @@ It also adds an **API** row at the sidebar foot (above Settings) showing the liv
 Each request is served by a **live DSH agent session** (the harness `agents` registry + the agent loop), so every call gets the agent's full world: its configured tools, bash/files access, skills, prompt sections, and preset persona. This is an **agent gateway**, not a thin LLM proxy:
 
 - The **agent owns tool use**. Client-side `tools` / `tool_choice` / function-call messages are rejected on both endpoints (`/v1/responses` no longer ignores them silently) — the agent decides what tools to call and why.
-- Streaming deltas arrive **once per committed assistant message**, not per token. Reasoning, tool calls, and token-level chunk streams stay off the wire; only committed assistant text reaches the client.
+- Chat deltas arrive **once per committed assistant message**, not per token. Responses sends lifecycle events first and the accumulated text after the turn ends. Neither endpoint exposes reasoning, tool calls or token-level chunks.
 - `/v1/responses` sends its `response.created` / `in_progress` lifecycle events as soon as the turn starts, so a long answer never looks hung, and a mid-turn failure closes the stream with an explicit `event: error`. A chat stream that dies mid-turn now emits an error frame before `[DONE]`.
 - The first request for a `(key, preset, session)` triple **seeds** a session by rendering the client's full message array into a labeled transcript prompt; later requests admit only the latest user turn (the session already holds the history).
 
@@ -66,23 +66,23 @@ Restart the profile after editing its configuration.
 
 Once the plugin is enabled, an **API** row appears at the sidebar foot (above Settings), styled like the harness's own To-dos row: icon, title, muted port, chevron. It starts collapsed; clicking it reveals the detail **upwards** (the toggle keeps its place first in the DOM, so tab and screen-reader order are unchanged), and the chevron flips down while open.
 
-- **Collapsed** it shows only the port, which is the number callers need (and on Desktop it is the runtime-assigned one, read live).
+- **After the first successful open**, the collapsed row retains the port. Desktop shows the actual runtime-assigned HTTP port.
 - **Expanding checks once by itself**: it reads the descriptor, then requests `GET <prefix>/models` — that lists models and never calls one.
 - **The result shares the row with the button**: blue dot when the surface answers, red when it does not. The **Detect** button appears **only when the surface is unreachable**, as a retry; a `401` means the surface answered and wants a key, which counts as healthy and shows no button.
 - **Base URL** is generated from the live listener and copies in one click; **Usage example** expands to a curl line and every endpoint path.
 - **Auth / Model id** show whether a key is required, or that the surface is keyless and loopback-only.
 
-The first frame after expanding already carries the full layout, so values fill in without a flash. The descriptor is read once per page session and cached: collapsing and reopening paints immediately and only re-runs the probe, and the port stays on the row while collapsed.
+The first open shows the full form with placeholder values. Subsequent opens keep the previous address and port visible while refreshing the descriptor and probing, rather than clearing the content first.
 
 Hovering or opening uses the same fill as the settings and account navigation rows (a theme token, so it follows light and dark). The detail is height-capped and scrolls internally, so it never pushes out of the sidebar.
 
-In the collapsed 56px rail the row becomes an icon button and the detail floats beside the rail, because the rail is too narrow for an inline reveal; its tooltip is the full base URL.
+When the host displays a collapsed 56px rail, the entry becomes an icon button with details beside it. Its accessible name includes the full address after a successful read.
 
 On Desktop the page is served over the app carrier, so the panel shows the **local HTTP address** to paste into other programs while the check still uses the current page. The panel never shows a key, only whether one is configured.
 
-The panel reads an allowlisted descriptor from `/api/openai-api/status` on every open: registered on the DSH Connection service, it inherits the host's loopback/origin trust checks, browser authentication, and owner-only access, and it works from the Desktop `dsh-app:` page through the app carrier. A failed read keeps the values already on screen and shows the reason.
+The panel reads `/api/openai-api/status` through DSH Connection, inheriting host origin checks, browser authentication and owner-only access; Desktop uses the same app carrier. The response contains only the schema version, prefix, model, key-required flag, listener origin and port — never key contents, provider or cwd.
 
-The descriptor carries only `pathPrefix`, `model`, `authRequired`, the listener origin, and the port — never a key, provider, or cwd. A failed read shows its reason and a retry button; the OpenAI endpoints are unaffected.
+A failed first read shows its reason and a retry button. A failed refresh keeps the previous address, marks the surface unavailable and offers detection; the next open re-reads the descriptor. The OpenAI endpoints are unaffected.
 
 ### Upgrading an existing installation
 
@@ -150,4 +150,6 @@ The browser half is built from:
 | `client/entry.js` | Registers the `sidebar.footer.action` slot |
 | `client/styles.css` | Styling, on the DSH theme tokens |
 
-`lib/client.js` is generated — edit the sources under `client/` and rebuild. `client/build.mjs --check` verifies the committed artifact matches its sources. The smoke test loads the real plugin, so it attempts a session-map read and write (a failed write is only logged).
+`lib/client.js` is generated: edit `client/` sources and rebuild; `node client/build.mjs --check` verifies synchronization. The build derives export names from the pure model module, with no second list to maintain, and checks generated syntax before writing.
+
+`npm test` discovers tests automatically. Protocol tests use fake agents, temporary loopback ports and isolated temporary session maps, releasing resources afterwards. They never call a real model or modify a user session map. Build tests likewise run in temporary copies.

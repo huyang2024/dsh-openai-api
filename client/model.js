@@ -46,12 +46,6 @@ export function parseStatus(value) {
 	};
 }
 
-/** Default port text for an origin whose URL omits it. */
-function effectivePort(url) {
-	if (url.port !== "") return url.port;
-	return url.protocol === "https:" ? "443" : "80";
-}
-
 /**
  * Derive the address a caller pastes into a client, the address this page
  * probes, and the loopback address to compare against.
@@ -73,7 +67,7 @@ export function resolveAddresses(status, documentUrl) {
 	return {
 		baseUrl: base === null ? null : base.href.replace(/\/+$/, ""),
 		probeUrl,
-		port: base === null ? status.listenPort : Number(effectivePort(base)),
+		port: base === null ? status.listenPort : Number(base.port || (base.protocol === "https:" ? 443 : 80)),
 		offCarrier: base !== null && !isWebPage,
 		// Pass the descriptor facts the panel displays straight through: without
 		// them the auth and model rows have nothing to show.

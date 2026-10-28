@@ -37,7 +37,7 @@ function reasonText(message) {
  */
 export function createUi(React, model) {
 	const h = React.createElement;
-	const { useCallback, useEffect, useRef, useState } = React;
+	const { useEffect, useRef, useState } = React;
 
 	function ApiIcon({ size }) {
 		return h("svg", { className: "dsh-openai-icon", width: size, height: size, viewBox: "0 0 16 16", fill: "none", "aria-hidden": true },
@@ -67,10 +67,7 @@ export function createUi(React, model) {
 	 * puts the reason on screen, where it can be reported.
 	 */
 	class Guard extends React.Component {
-		constructor(props) {
-			super(props);
-			this.state = { error: null };
-		}
+		state = { error: null };
 
 		static getDerivedStateFromError(error) {
 			return { error };
@@ -130,26 +127,23 @@ export function createUi(React, model) {
 					// Expanding is the request to know whether the surface answers.
 					await runProbe(addresses.probeUrl, controller.signal);
 				} catch (error) {
-					if (controller.signal.aborted || hasValues) return;
-					setLoad({ phase: "error", message: error instanceof Error ? error.message : String(error), statusUrl });
+					if (controller.signal.aborted) return;
+					setProbe("error");
+					if (!hasValues) setLoad({ phase: "error", message: error instanceof Error ? error.message : String(error), statusUrl });
 				}
 			})();
 			return () => controller.abort();
 		}, [open, attempt]);
 
-		const close = useCallback(() => setOpen(false), []);
-
 		useEffect(() => {
 			if (!open) return undefined;
 			const onKeyDown = (event) => {
 				// Another surface may own this Escape (a dialog above us).
-				if (event.key === "Escape" && !event.defaultPrevented) close();
+				if (event.key === "Escape" && !event.defaultPrevented) setOpen(false);
 			};
 			const onPointerDown = (event) => {
-				if (rootRef.current?.contains(event.target) === true) return;
-				// The rail's detail floats, so it sits outside the row's own box.
-				if (event.target?.closest?.(".dsh-openai-detail") != null) return;
-				close();
+				// Fixed positioning changes layout, not DOM containment.
+				if (!rootRef.current?.contains(event.target)) setOpen(false);
 			};
 			document.addEventListener("keydown", onKeyDown);
 			document.addEventListener("pointerdown", onPointerDown, true);
@@ -157,7 +151,7 @@ export function createUi(React, model) {
 				document.removeEventListener("keydown", onKeyDown);
 				document.removeEventListener("pointerdown", onPointerDown, true);
 			};
-		}, [open, close]);
+		}, [open]);
 
 		useEffect(() => () => clearTimeout(copyTimer.current), []);
 
@@ -166,9 +160,9 @@ export function createUi(React, model) {
 			setProbe("checking");
 			try {
 				const result = await model.requestJson(window.fetch.bind(window), url, signal);
-				setProbe(model.probeResult(result));
+				if (!signal?.aborted) setProbe(model.probeResult(result));
 			} catch {
-				setProbe("error");
+				if (!signal?.aborted) setProbe("error");
 			}
 		};
 
@@ -198,11 +192,11 @@ export function createUi(React, model) {
 		const shownProbe = probe === "idle" && open ? "checking" : probe;
 		const [probeText, probeTone] = PROBE_TEXT[shownProbe] ?? ["", "neutral"];
 		// A healthy surface needs no button: only an unanswered or refused one does.
-		const showRetry = shownProbe !== "idle" && shownProbe !== "checking" && shownProbe !== "ok" && shownProbe !== "auth";
+		const showRetry = probeTone === "error";
 		const ready = load.phase === "ready";
 		// The header carries the one fact worth showing while collapsed.
 		const progress = ready
-			? String(load.port ?? load.listenPort ?? "")
+			? String(load.port ?? "")
 			: load.phase === "error"
 				? "读取失败"
 				: open
@@ -255,7 +249,7 @@ export function createUi(React, model) {
 								h(Row, { term: "模型 id" }, ready ? (load.model ?? "—") : "—"),
 							),
 
-							ready && load.offCarrier && load.listenerOrigin !== null && h("p", { className: "dsh-openai-note" }, "这是本机监听地址；桌面端页面经由应用通道访问，检测仍走当前页面。"),
+							ready && load.offCarrier && h("p", { className: "dsh-openai-note" }, "这是本机监听地址；桌面端页面经由应用通道访问，检测仍走当前页面。"),
 
 							h("div", { className: "dsh-openai-checkrow" },
 								h("div", { className: "dsh-openai-status", "data-tone": probeTone, role: "status", "aria-live": "polite" },
